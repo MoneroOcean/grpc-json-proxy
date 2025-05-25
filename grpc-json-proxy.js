@@ -154,6 +154,7 @@ const server = http.createServer((req, res) => {
 
       // Call the gRPC method with the parameters
       let stream_data = [];
+      let is_err = false;
       clients[methods[method]][method](params || {}, (err, response) => {
         if (err) {
           console.error("gRPC call error:", err);
@@ -174,6 +175,7 @@ const server = http.createServer((req, res) => {
       }).on('data', (data) => {
          stream_data.push(data);
       }).on('end', () => {
+         if (is_err) return;
          res.writeHead(200, { 'Content-Type': 'application/json' });
          res.end(JSON.stringify({
            json_rpc: "2.0",
@@ -181,6 +183,7 @@ const server = http.createServer((req, res) => {
            id: id
          }));
       }).on('error', (e) => {
+        is_err = true;
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           json_rpc: "2.0",
