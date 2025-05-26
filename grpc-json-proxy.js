@@ -33,7 +33,7 @@ if (!portGRPC) {
 // Load and parse the .proto file
 let packageDefinition;
 try {
-  packageDefinition = protoLoader.loadSync(protoFilePath, {});
+  packageDefinition = protoLoader.loadSync(protoFilePath, { keepCase: true });
 } catch (e) {
   console.error("Error loading .proto file:", e);
   return help();
