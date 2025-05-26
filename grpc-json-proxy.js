@@ -33,7 +33,7 @@ if (!portGRPC) {
 // Load and parse the .proto file
 let packageDefinition;
 try {
-  packageDefinition = protoLoader.loadSync(protoFilePath, { keepCase: true });
+  packageDefinition = protoLoader.loadSync(protoFilePath, { keepCase: true, bytes: Array, longs: Number });
 } catch (e) {
   console.error("Error loading .proto file:", e);
   return help();
@@ -58,48 +58,6 @@ function map_functions(service, path) {
 
 const proto = grpc.loadPackageDefinition(packageDefinition);
 map_functions(proto);
-
-// in all subobjects covert buffers like
-// {"type":"Buffer","data":[94,59,76,39,128,46,71,2,177,74,200,165,51,16,252,136,178,140,60,210,117,43,142,107,70,190,190,37,59,22,18,52]}to hex strings
-function convertBuffersToHex(obj) {
-  if (Array.isArray(obj)) {
-    return obj.map(convertBuffersToHex);
-  }
-
-  if (obj && typeof obj === 'object') {
-    // Check for Buffer-like structure
-    if (
-      obj.type === 'Buffer' &&
-      Array.isArray(obj.data) &&
-      obj.data.every(n => typeof n === 'number')
-    ) {
-      return Buffer.from(obj.data).toString('hex');
-    }
-
-    // Convert protobuf Long-like object to number
-    if (
-      typeof obj.low === 'number' &&
-      typeof obj.high === 'number' &&
-      typeof obj.unsigned === 'boolean'
-    ) {
-      // Use BigInt to safely handle 64-bit ints
-      const low = BigInt(obj.low >>> 0);  // >>> 0 ensures unsigned interpretation
-      const high = BigInt(obj.high >>> 0);
-      const result = (high << 32n) | low;
-      return obj.unsigned ? Number(result) : Number(result << 0n); // convert to signed if needed
-    }
-
-    // Recurse into nested objects
-    const result = {};
-    for (const key in obj) {
-      result[key] = convertBuffersToHex(obj[key]);
-    }
-    return result;
-  }
-
-  // Return non-object values unchanged
-  return obj;
-}
 
 // Create an HTTP server to act as the proxy
 const server = http.createServer((req, res) => {
@@ -168,7 +126,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             json_rpc: "2.0",
-            result: convertBuffersToHex(JSON.parse(JSON.stringify(response))),
+            result: response,
             id: id
           }));
         }
@@ -179,7 +137,7 @@ const server = http.createServer((req, res) => {
          res.writeHead(200, { 'Content-Type': 'application/json' });
          res.end(JSON.stringify({
            json_rpc: "2.0",
-           result: convertBuffersToHex(JSON.parse(JSON.stringify(stream_data))),
+           result: stream_data,
            id: id
          }));
       }).on('error', (e) => {
