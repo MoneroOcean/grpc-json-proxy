@@ -24,7 +24,7 @@ if (!portREST) {
   return help();
 }
 
-const portGRPC = process.argv[4]; // GRPC server port name 
+const portGRPC = process.argv[4]; // GRPC server port name
 if (!portGRPC) {
   console.error("Error: You must provide GRPC port number");
   return help();
@@ -79,12 +79,12 @@ const server = http.createServer((req, res) => {
   req.on('data', chunk => {
     body += chunk;
   });
-  
+
   req.on('end', () => {
     try {
       // Parse the JSON-RPC request body
       const request = JSON.parse(body);
-      
+
       // Validate the JSON-RPC structure
       if (request.jsonrpc !== "2.0" || !request.method || !request.id) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -162,7 +162,7 @@ const server = http.createServer((req, res) => {
 });
 
 // Start the server
-server.listen(portREST, () => {
+server.listen(portREST, "127.0.0.1", () => {
   console.log(`JSON-RPC proxy listening on http://localhost:${portREST}`);
 });
 
