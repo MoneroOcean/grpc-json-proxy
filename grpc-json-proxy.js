@@ -162,7 +162,7 @@ const server = http.createServer((req, res) => {
 });
 
 // Start the server
-server.listen(portREST, "127.0.0.1", () => {
-  console.log(`JSON-RPC proxy listening on http://localhost:${portREST}`);
+server.listen(portREST, "0.0.0.0", () => {
+  console.log(`JSON-RPC proxy listening on http://0.0.0.0:${portREST}`);
 });
 
