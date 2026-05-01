@@ -1,0 +1,23 @@
+{
+  "name": "grpc-json-proxy",
+  "version": "1.0.0",
+  "description": "Small JSON-RPC to gRPC proxy for Tari node and wallet protos with quiet daemon-style status output.",
+  "private": true,
+  "type": "module",
+  "license": "BSD-3-Clause",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node ./grpc-json-proxy.js",
+    "test": "node --test tests/*.js",
+    "check": "node --check ./grpc-json-proxy.js"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "1.14.3",
+    "@grpc/proto-loader": "0.8.0"
+  },
+  "overrides": {
+    "protobufjs": "7.5.6"
+  }
+}

@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package test.rpc;
+
+service MockService {
+  rpc Echo(EchoRequest) returns (EchoResponse);
+  rpc ListItems(ListItemsRequest) returns (stream Item);
+  rpc Fail(EchoRequest) returns (EchoResponse);
+}
+
+service OtherService {
+  rpc Echo(EchoRequest) returns (EchoResponse);
+}
+
+message EchoRequest {
+  string message = 1;
+}
+
+message EchoResponse {
+  string message = 1;
+}
+
+message ListItemsRequest {
+  uint32 count = 1;
+}
+
+message Item {
+  uint32 index = 1;
+  string label = 2;
+}
