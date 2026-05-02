@@ -373,7 +373,7 @@ function validateJsonRpcRequest(request) {
   if (!Object.hasOwn(request, 'id')) {
     return { ...JSON_RPC_ERRORS.invalidRequest, data: 'Request id is required' };
   }
-  if (request.params !== undefined && (request.params === null || typeof request.params !== 'object' || Array.isArray(request.params))) {
+  if (request.params !== undefined && request.params !== null && (typeof request.params !== 'object' || Array.isArray(request.params))) {
     return { ...JSON_RPC_ERRORS.invalidRequest, data: 'params must be a JSON object when provided' };
   }
   return null;
