@@ -6,7 +6,8 @@
   "type": "module",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": ">=20.11"
+    "node": ">=22.9.0",
+    "npm": ">=11.10.0"
   },
   "scripts": {
     "start": "node ./grpc-json-proxy.js",
