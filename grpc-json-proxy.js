@@ -493,11 +493,8 @@ export function createLogger({ quiet = false, verbose = false, timestamps = fals
       if (count > 0) {
         return false;
       }
-      if (verbose && error?.stack) {
-        console.error(`${format(`error method=${scope} message=${JSON.stringify(message)}`)}\n${error.stack}`);
-        return true;
-      }
-      console.error(format(`error method=${scope} message=${JSON.stringify(message)}`));
+      const line = format(`error method=${scope} message=${JSON.stringify(message)}`);
+      console.error(verbose && error?.stack ? `${line}\n${error.stack}` : line);
       return true;
     },
   };
