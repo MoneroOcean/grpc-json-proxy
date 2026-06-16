@@ -102,10 +102,10 @@ export function helpText() {
     '  --service <name>          Expose one service, for example tari.rpc.BaseNode',
     '  --status-interval <ms|s>  Status line interval (default: 30s)',
     `  --max-body-bytes <bytes>  Maximum JSON body size (default: ${DEFAULT_MAX_BODY_BYTES})`,
-    '  --quiet                  Disable periodic status lines',
-    '  --verbose                Print full error stacks',
-    '  --timestamps             Prefix proxy log lines with ISO timestamps',
-    '  --help                   Show this help',
+    '  --quiet                   Disable periodic status lines',
+    '  --verbose                 Print full error stacks',
+    '  --timestamps              Prefix proxy log lines with ISO timestamps',
+    '  --help                    Show this help',
   ].join('\n');
 }
 
