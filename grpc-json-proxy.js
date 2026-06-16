@@ -227,7 +227,7 @@ function buildServiceRegistry(options) {
       return { error: { ...JSON_RPC_ERRORS.methodNotFound, data: { method: methodName } } };
     },
     summary(config) {
-      const methodCount = [...methodsByQualifiedName.keys()].length;
+      const methodCount = methodsByQualifiedName.size;
       return `proxy listening rest=${config.bind}:${config.restPort} grpc=${target} proto=${path.basename(config.protoFile)} services=${selected.map((service) => service.name).join(',')} methods=${methodCount}`;
     },
   };
