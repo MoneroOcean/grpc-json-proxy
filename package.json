@@ -11,6 +11,7 @@
   },
   "scripts": {
     "start": "node ./grpc-json-proxy.js",
+    "pretest": "npm run lint",
     "test": "node --test tests/*.js",
     "check": "node --check ./grpc-json-proxy.js",
     "lint": "eslint ."
