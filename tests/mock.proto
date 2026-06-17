@@ -6,6 +6,8 @@ service MockService {
   rpc Echo(EchoRequest) returns (EchoResponse);
   rpc ListItems(ListItemsRequest) returns (stream Item);
   rpc Fail(EchoRequest) returns (EchoResponse);
+  rpc Hang(EchoRequest) returns (EchoResponse);
+  rpc Big(EchoRequest) returns (EchoResponse);
 }
 
 service OtherService {

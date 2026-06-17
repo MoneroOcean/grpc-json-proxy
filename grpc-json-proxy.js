@@ -12,6 +12,9 @@ const DEFAULT_BIND = '0.0.0.0';
 const DEFAULT_GRPC_HOST = '127.0.0.1';
 const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
+const DEFAULT_CALL_TIMEOUT_MS = 60_000;          // per-call gRPC deadline; 0 disables
+const DEFAULT_MAX_RECV_BYTES = 67_108_864;       // 64 MiB grpc.max_receive_message_length
+const DEFAULT_MAX_RESPONSE_ROWS = 1_000_000;     // cap on buffered server-stream rows; 0 = unlimited
 const JSON_CONTENT_TYPE = { 'Content-Type': 'application/json' };
 
 const JSON_RPC_ERRORS = {
@@ -27,6 +30,9 @@ export function parseArgs(argv) {
     grpcHost: DEFAULT_GRPC_HOST,
     statusIntervalMs: DEFAULT_STATUS_INTERVAL_MS,
     maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+    callTimeoutMs: DEFAULT_CALL_TIMEOUT_MS,
+    maxRecvBytes: DEFAULT_MAX_RECV_BYTES,
+    maxResponseRows: DEFAULT_MAX_RESPONSE_ROWS,
     quiet: false,
     verbose: false,
     timestamps: false,
@@ -59,6 +65,12 @@ export function parseArgs(argv) {
       options.statusIntervalMs = parseDuration(next());
     } else if (arg === '--max-body-bytes') {
       options.maxBodyBytes = parsePositiveInteger(next(), '--max-body-bytes');
+    } else if (arg === '--call-timeout') {
+      options.callTimeoutMs = parseDuration(next(), '--call-timeout', { allowZero: true });
+    } else if (arg === '--max-recv-bytes') {
+      options.maxRecvBytes = parsePositiveInteger(next(), '--max-recv-bytes');
+    } else if (arg === '--max-response-rows') {
+      options.maxResponseRows = parseNonNegativeInteger(next(), '--max-response-rows');
     } else if (arg === '--quiet') {
       options.quiet = true;
     } else if (arg === '--verbose') {
@@ -102,6 +114,9 @@ export function helpText() {
     '  --service <name>          Expose one service, for example tari.rpc.BaseNode',
     '  --status-interval <ms|s>  Status line interval (default: 30s)',
     `  --max-body-bytes <bytes>  Maximum JSON body size (default: ${DEFAULT_MAX_BODY_BYTES})`,
+    `  --call-timeout <ms|s>     Per-call gRPC deadline, 0 disables (default: ${DEFAULT_CALL_TIMEOUT_MS}ms)`,
+    `  --max-recv-bytes <bytes>  Max gRPC receive message size (default: ${DEFAULT_MAX_RECV_BYTES})`,
+    `  --max-response-rows <n>   Max buffered server-stream rows, 0=unlimited (default: ${DEFAULT_MAX_RESPONSE_ROWS})`,
     '  --quiet                   Disable periodic status lines',
     '  --verbose                 Print full error stacks',
     '  --timestamps              Prefix proxy log lines with ISO timestamps',
@@ -206,9 +221,17 @@ function buildServiceRegistry(options) {
   const methodsByName = new Map();
   const methodsByQualifiedName = new Map();
   const target = `${options.grpcHost}:${options.grpcPort}`;
+  // Raise the gRPC message size cap above the 4 MB @grpc/grpc-js default so large
+  // upstream responses (e.g. Tari GetBlocks over a wide height range) don't fail
+  // with RESOURCE_EXHAUSTED. Still bounded (not -1) so a single message can't grow
+  // without limit; the per-stream row cap bounds the count of buffered messages.
+  const maxRecvBytes = options.maxRecvBytes ?? DEFAULT_MAX_RECV_BYTES;
 
   for (const service of selected) {
-    const client = new service.ctor(target, grpc.credentials.createInsecure());
+    const client = new service.ctor(target, grpc.credentials.createInsecure(), {
+      'grpc.max_receive_message_length': maxRecvBytes,
+      'grpc.max_send_message_length': maxRecvBytes,
+    });
     clients.set(service.name, client);
 
     for (const [methodName, definition] of Object.entries(service.ctor.service)) {
@@ -339,7 +362,10 @@ async function handleHttpRequest(req, res, context) {
       return;
     }
 
-    const result = await callGrpcMethod(descriptor, request.params ?? {});
+    const result = await callGrpcMethod(descriptor, request.params ?? {}, {
+      callTimeoutMs: context.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
+      maxResponseRows: context.maxResponseRows ?? DEFAULT_MAX_RESPONSE_ROWS,
+    });
     context.metrics.ok += 1;
     sendJsonRpcResult(res, request.id, result);
   } catch (error) {
@@ -404,7 +430,14 @@ function validateJsonRpcRequest(request) {
   return null;
 }
 
-function callGrpcMethod(descriptor, params) {
+// A gRPC call option that bounds total call duration, so a hung-but-silent
+// upstream (never sends a response or 'end') can't wedge the HTTP request
+// forever and leak the active-request counter / HTTP socket. 0 disables it.
+function callDeadline(callTimeoutMs) {
+  return callTimeoutMs > 0 ? { deadline: Date.now() + callTimeoutMs } : {};
+}
+
+function callGrpcMethod(descriptor, params, limits) {
   const { definition, client, name } = descriptor;
   if (definition.requestStream) {
     return Promise.reject(new Error(`Client-streaming method is not supported: ${descriptor.qualifiedName}`));
@@ -414,14 +447,14 @@ function callGrpcMethod(descriptor, params) {
   // must branch here because callback-style unary calls and EventEmitter-style
   // server streams cannot be safely handled by the same control flow.
   if (definition.responseStream) {
-    return callServerStreaming(client, name, params);
+    return callServerStreaming(client, name, params, limits);
   }
-  return callUnary(client, name, params);
+  return callUnary(client, name, params, limits);
 }
 
-function callUnary(client, methodName, params) {
+function callUnary(client, methodName, params, limits) {
   return new Promise((resolve, reject) => {
-    client[methodName](params, (error, response) => {
+    client[methodName](params, new grpc.Metadata(), callDeadline(limits.callTimeoutMs), (error, response) => {
       if (error) {
         reject(error);
       } else {
@@ -431,11 +464,21 @@ function callUnary(client, methodName, params) {
   });
 }
 
-function callServerStreaming(client, methodName, params) {
+function callServerStreaming(client, methodName, params, limits) {
   return new Promise((resolve, reject) => {
     const rows = [];
-    const stream = client[methodName](params);
-    stream.on('data', (data) => rows.push(data));
+    const stream = client[methodName](params, new grpc.Metadata(), callDeadline(limits.callTimeoutMs));
+    stream.on('data', (data) => {
+      // Bound the number of buffered rows so a large/broad stream (potentially
+      // attacker-driven, since the endpoint is unauthenticated) can't grow the
+      // response array until the process runs out of memory.
+      if (limits.maxResponseRows > 0 && rows.length >= limits.maxResponseRows) {
+        stream.cancel();
+        reject(new Error(`Server-streaming response exceeded ${limits.maxResponseRows} rows`));
+        return;
+      }
+      rows.push(data);
+    });
     stream.on('error', reject);
     stream.on('end', () => resolve(rows));
   });
@@ -567,11 +610,20 @@ function parsePositiveInteger(value, label) {
   return parsed;
 }
 
-function parseDuration(value) {
-  if (typeof value === 'string' && value.endsWith('s')) {
-    return parsePositiveInteger(value.slice(0, -1), '--status-interval') * 1000;
+function parseNonNegativeInteger(value, label) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
   }
-  return parsePositiveInteger(value, '--status-interval');
+  return parsed;
+}
+
+function parseDuration(value, label = '--status-interval', { allowZero = false } = {}) {
+  const toInt = allowZero ? parseNonNegativeInteger : parsePositiveInteger;
+  if (typeof value === 'string' && value.endsWith('s')) {
+    return toInt(value.slice(0, -1), label) * 1000;
+  }
+  return toInt(value, label);
 }
 
 function timestamp() {

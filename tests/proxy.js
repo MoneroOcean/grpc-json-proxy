@@ -282,6 +282,82 @@ describe('ambiguous method dispatch', () => {
   }
 });
 
+describe('resource limits', () => {
+  let grpcServer;
+  let grpcPort;
+
+  beforeEach(async () => {
+    ({ server: grpcServer, port: grpcPort } = await startMockGrpcServer());
+  });
+
+  afterEach(async () => {
+    if (grpcServer) {
+      await new Promise((resolve) => grpcServer.tryShutdown(resolve));
+      grpcServer = undefined;
+    }
+  });
+
+  async function withProxy(overrides, fn) {
+    const proxy = createProxy({
+      protoFile: fixtureProto,
+      restPort: 0,
+      grpcPort,
+      grpcHost: '127.0.0.1',
+      bind: '127.0.0.1',
+      service: 'test.rpc.MockService',
+      statusIntervalMs: 30_000,
+      maxBodyBytes: 4096,
+      quiet: true,
+      verbose: false,
+      logger: testLogger([]),
+      ...overrides,
+    });
+    await proxy.start();
+    const baseUrl = `http://127.0.0.1:${proxy.server.address().port}`;
+    try {
+      return await fn(baseUrl);
+    } finally {
+      await proxy.stop();
+    }
+  }
+
+  async function post(baseUrl, payload) {
+    const response = await fetch(`${baseUrl}/json_rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return { status: response.status, body: await response.json() };
+  }
+
+  it('aborts a hung upstream call once the deadline passes', async () => {
+    await withProxy({ callTimeoutMs: 100 }, async (baseUrl) => {
+      const response = await post(baseUrl, { jsonrpc: '2.0', id: 'hang', method: 'Hang', params: {} });
+      assert.ok(response.status >= 400);
+      assert.ok(response.body.error);
+    });
+  });
+
+  it('caps the number of buffered server-stream rows', async () => {
+    await withProxy({ maxResponseRows: 2 }, async (baseUrl) => {
+      const response = await post(baseUrl, { jsonrpc: '2.0', id: 'big', method: 'ListItems', params: { count: 5 } });
+      assert.ok(response.status >= 400);
+      const detail = response.body.error?.data ?? response.body.error?.message ?? '';
+      assert.match(detail, /exceeded 2 rows/);
+    });
+  });
+
+  it('enforces the configured gRPC receive message limit', async () => {
+    // Tiny request (passes the send limit) but a large response (Big returns
+    // ~8 KiB), so the bound is tripped specifically on the receive path.
+    await withProxy({ maxRecvBytes: 1024 }, async (baseUrl) => {
+      const response = await post(baseUrl, { jsonrpc: '2.0', id: 'big-msg', method: 'Big', params: {} });
+      assert.ok(response.status >= 400);
+      assert.ok(response.body.error);
+    });
+  });
+});
+
 describe('vendored Tari protos', () => {
   for (const proto of ['base_node.proto', 'wallet.proto']) {
     it(`loads ${proto}`, () => {
@@ -323,6 +399,15 @@ async function startMockGrpcServer() {
         code: grpc.status.UNAVAILABLE,
         details: 'mock unavailable',
       });
+    },
+    Hang() {
+      // Intentionally never invoke the callback: simulates a hung-but-silent
+      // upstream so the per-call deadline can be exercised.
+    },
+    Big(call, callback) {
+      // Large response to a tiny request: lets a test trip the receive-message
+      // limit (on the response) without first hitting the send limit (request).
+      callback(null, { message: 'x'.repeat(8192) });
     },
   });
 
