@@ -156,6 +156,30 @@ describe('JSON-RPC proxy', () => {
     assert.equal(response.body.error.code, -32603);
   });
 
+  it('survives a post-startup server error instead of crashing', () => {
+    const before = proxy.metrics.error;
+    // With the previous code the only 'error' listener was removed after listen(),
+    // so this emit would be rethrown by EventEmitter and terminate the process.
+    assert.doesNotThrow(() => {
+      proxy.server.emit('error', Object.assign(new Error('synthetic accept failure'), { code: 'EMFILE' }));
+    });
+    assert.equal(proxy.metrics.error, before + 1);
+    assert.equal(logs.filter((line) => line.type === 'error' && line.scope === 'server').length, 1);
+  });
+
+  it('does not accumulate error listeners across restart cycles', async () => {
+    for (let i = 0; i < 3; i += 1) {
+      await proxy.stop();
+      await proxy.start();
+    }
+    // Exactly one persistent listener regardless of how many start()/stop() cycles ran.
+    assert.equal(proxy.server.listenerCount('error'), 1);
+    const before = proxy.metrics.error;
+    proxy.server.emit('error', Object.assign(new Error('one'), { code: 'EMFILE' }));
+    // A single error event is logged/counted once, not once per past start().
+    assert.equal(proxy.metrics.error, before + 1);
+  });
+
   it('deduplicates repeated gRPC errors', async () => {
     const request = {
       jsonrpc: '2.0',

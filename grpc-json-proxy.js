@@ -130,6 +130,29 @@ export function createProxy(options) {
     });
   });
 
+  // A single 'error' listener for the server's whole lifetime, registered once
+  // here (not per start()) so repeated start()/stop() cycles never accumulate
+  // listeners or multiply error logging. While a start() is in flight it rejects
+  // that start() promise; otherwise it logs and counts the error instead of
+  // letting Node rethrow it as an uncaught exception that would kill the
+  // long-running proxy on transient conditions (e.g. accept-time EMFILE/ENFILE
+  // under file-descriptor pressure).
+  let starting = false;
+  let rejectStart = null;
+  server.on('error', (error) => {
+    if (starting && rejectStart) {
+      const reject = rejectStart;
+      starting = false;
+      rejectStart = null;
+      reject(error);
+      return;
+    }
+    metrics.error += 1;
+    if (logger.error('server', error) === false) {
+      metrics.repeatedErrors += 1;
+    }
+  });
+
   return {
     server,
     logger,
@@ -137,9 +160,11 @@ export function createProxy(options) {
     registry,
     start() {
       return new Promise((resolve, reject) => {
-        server.once('error', reject);
+        starting = true;
+        rejectStart = reject;
         server.listen(options.restPort, options.bind, () => {
-          server.off('error', reject);
+          starting = false;
+          rejectStart = null;
           logger.start(registry.summary(options));
           logger.startStatus(metrics);
           resolve(server);
