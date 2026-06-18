@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,6 +179,34 @@ describe('JSON-RPC proxy', () => {
     proxy.server.emit('error', Object.assign(new Error('one'), { code: 'EMFILE' }));
     // A single error event is logged/counted once, not once per past start().
     assert.equal(proxy.metrics.error, before + 1);
+  });
+
+  it('stop() resolves even with an idle keep-alive connection held open', async () => {
+    // Open a keep-alive HTTP connection and complete one request so the socket
+    // lingers idle. Without closeIdleConnections() server.close() would never
+    // invoke its callback and stop() would hang forever.
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    const address = proxy.server.address();
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        { host: '127.0.0.1', port: address.port, path: '/json_rpc', method: 'POST', agent, headers: { 'Content-Type': 'application/json' } },
+        (res) => {
+          res.resume();
+          res.on('end', resolve);
+          res.on('error', reject);
+        },
+      );
+      req.on('error', reject);
+      req.end(JSON.stringify({ jsonrpc: '2.0', id: 'keepalive', method: 'Echo', params: { message: 'hi' } }));
+    });
+
+    await Promise.race([
+      proxy.stop(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('stop() did not resolve')), 2000)),
+    ]);
+    agent.destroy();
+    // Restart so the shared afterEach hook's stop() has a live server again.
+    await proxy.start();
   });
 
   it('deduplicates repeated gRPC errors', async () => {

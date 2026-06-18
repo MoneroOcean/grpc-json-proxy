@@ -15,6 +15,7 @@ const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;          // per-call gRPC deadline; 0 disables
 const DEFAULT_MAX_RECV_BYTES = 67_108_864;       // 64 MiB grpc.max_receive_message_length
 const DEFAULT_MAX_RESPONSE_ROWS = 1_000_000;     // cap on buffered server-stream rows; 0 = unlimited
+const SHUTDOWN_GRACE_MS = 10_000;                // max wait for in-flight requests to drain on SIGTERM/SIGINT
 const JSON_CONTENT_TYPE = { 'Content-Type': 'application/json' };
 
 const JSON_RPC_ERRORS = {
@@ -190,6 +191,11 @@ export function createProxy(options) {
       logger.stopStatus();
       return new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        // server.close() only invokes its callback once every connection has
+        // drained, so idle keep-alive connections (no in-flight request) would
+        // otherwise keep stop() pending indefinitely. Drop them immediately;
+        // this does not abort connections that still have a request in flight.
+        server.closeIdleConnections?.();
       });
     },
   };
@@ -642,7 +648,18 @@ async function main() {
     await proxy.start();
 
     const shutdown = async () => {
-      await proxy.stop();
+      // server.close() (inside stop()) only resolves once every connection has
+      // drained; a request stuck on a slow/hung upstream (e.g. with
+      // --call-timeout 0) would otherwise leave this handler awaiting forever
+      // and the proxy unkillable by a process manager. Cap the wait so the
+      // process always terminates on SIGTERM/SIGINT.
+      const forceExit = setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS);
+      forceExit.unref?.();
+      try {
+        await proxy.stop();
+      } catch {
+        // Best-effort shutdown: fall through to exit regardless of close errors.
+      }
       process.exit(0);
     };
     process.once('SIGINT', shutdown);
