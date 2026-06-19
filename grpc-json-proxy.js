@@ -510,8 +510,17 @@ function sendJson(res, status, payload) {
   if (res.headersSent) {
     return;
   }
+  let serialized;
+  try {
+    serialized = `${JSON.stringify(payload)}\n`;
+  } catch {
+    // Serialization can fail (e.g. RangeError when a buffered server-stream result exceeds V8's max string length). Never leave the response hung.
+    res.writeHead(500, JSON_CONTENT_TYPE);
+    res.end('{"jsonrpc":"2.0","error":{"code":-32603,"message":"Internal error"},"id":null}\n');
+    return;
+  }
   res.writeHead(status, JSON_CONTENT_TYPE);
-  res.end(`${JSON.stringify(payload)}\n`);
+  res.end(serialized);
 }
 
 export function createMetrics() {
