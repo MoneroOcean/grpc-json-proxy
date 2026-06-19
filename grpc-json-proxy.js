@@ -335,12 +335,7 @@ async function handleHttpRequest(req, res, context) {
   try {
     body = await readBody(req, context.maxBodyBytes);
   } catch (error) {
-    context.metrics.error += 1;
-    logError(context, 'request', error);
-    sendJsonRpcError(res, grpcErrorStatus(error), null, {
-      ...JSON_RPC_ERRORS.internalError,
-      data: normalizeErrorMessage(error),
-    });
+    sendInternalError(context, res, 'request', null, error);
     return;
   }
   let request;
@@ -375,15 +370,19 @@ async function handleHttpRequest(req, res, context) {
     context.metrics.ok += 1;
     sendJsonRpcResult(res, request.id, result);
   } catch (error) {
-    context.metrics.error += 1;
-    logError(context, request.method, error);
-    sendJsonRpcError(res, grpcErrorStatus(error), request.id, {
-      ...JSON_RPC_ERRORS.internalError,
-      data: normalizeErrorMessage(error),
-    });
+    sendInternalError(context, res, request.method, request.id, error);
   } finally {
     context.metrics.active -= 1;
   }
+}
+
+function sendInternalError(context, res, scope, id, error) {
+  context.metrics.error += 1;
+  logError(context, scope, error);
+  sendJsonRpcError(res, grpcErrorStatus(error), id, {
+    ...JSON_RPC_ERRORS.internalError,
+    data: normalizeErrorMessage(error),
+  });
 }
 
 function logError(context, scope, error) {

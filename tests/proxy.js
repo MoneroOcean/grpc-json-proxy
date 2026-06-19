@@ -9,6 +9,23 @@ import { createProxy, parseArgs } from '../grpc-json-proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixtureProto = path.join(__dirname, 'mock.proto');
+const PROTO_LOADER_OPTIONS = { keepCase: true, longs: String, bytes: Array, defaults: true };
+
+async function postRaw(baseUrl, body) {
+  const response = await fetch(`${baseUrl}/json_rpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+  return {
+    status: response.status,
+    body: await response.json(),
+  };
+}
+
+function postJson(baseUrl, payload) {
+  return postRaw(baseUrl, JSON.stringify(payload));
+}
 
 describe('argument parsing', () => {
   it('keeps the original positional usage and parses modern options', () => {
@@ -78,7 +95,7 @@ describe('JSON-RPC proxy', () => {
   });
 
   it('proxies unary calls and accepts id 0', async () => {
-    const response = await postJson({
+    const response = await postJson(baseUrl, {
       jsonrpc: '2.0',
       id: 0,
       method: 'Echo',
@@ -94,7 +111,7 @@ describe('JSON-RPC proxy', () => {
   });
 
   it('proxies server-streaming calls as arrays', async () => {
-    const response = await postJson({
+    const response = await postJson(baseUrl, {
       jsonrpc: '2.0',
       id: 'stream',
       method: 'ListItems',
@@ -114,7 +131,7 @@ describe('JSON-RPC proxy', () => {
   });
 
   it('returns parse errors for malformed JSON', async () => {
-    const response = await postRaw('{not json');
+    const response = await postRaw(baseUrl, '{not json');
 
     assert.equal(response.status, 400);
     assert.equal(response.body.jsonrpc, '2.0');
@@ -123,7 +140,7 @@ describe('JSON-RPC proxy', () => {
   });
 
   it('returns invalid request when id is missing', async () => {
-    const response = await postJson({
+    const response = await postJson(baseUrl, {
       jsonrpc: '2.0',
       method: 'Echo',
       params: { message: 'hello' },
@@ -134,7 +151,7 @@ describe('JSON-RPC proxy', () => {
   });
 
   it('returns method not found for unknown methods', async () => {
-    const response = await postJson({
+    const response = await postJson(baseUrl, {
       jsonrpc: '2.0',
       id: 'missing',
       method: 'DoesNotExist',
@@ -146,7 +163,7 @@ describe('JSON-RPC proxy', () => {
   });
 
   it('rejects oversized request bodies', async () => {
-    const response = await postRaw(JSON.stringify({
+    const response = await postRaw(baseUrl, JSON.stringify({
       jsonrpc: '2.0',
       id: 'large',
       method: 'Echo',
@@ -217,29 +234,13 @@ describe('JSON-RPC proxy', () => {
       params: { message: 'bad' },
     };
 
-    const first = await postJson(request);
-    const second = await postJson({ ...request, id: 'fail-2' });
+    const first = await postJson(baseUrl, request);
+    const second = await postJson(baseUrl, { ...request, id: 'fail-2' });
 
     assert.equal(first.status, 502);
     assert.equal(second.status, 502);
     assert.equal(logs.filter((line) => line.type === 'error').length, 1);
   });
-
-  async function postJson(payload) {
-    return postRaw(JSON.stringify(payload));
-  }
-
-  async function postRaw(body) {
-    const response = await fetch(`${baseUrl}/json_rpc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
-    return {
-      status: response.status,
-      body: await response.json(),
-    };
-  }
 });
 
 describe('ambiguous method dispatch', () => {
@@ -279,7 +280,7 @@ describe('ambiguous method dispatch', () => {
   });
 
   it('rejects ambiguous bare method names and accepts fully qualified names', async () => {
-    const ambiguous = await postJson({
+    const ambiguous = await postJson(baseUrl, {
       jsonrpc: '2.0',
       id: 'ambiguous',
       method: 'Echo',
@@ -288,7 +289,7 @@ describe('ambiguous method dispatch', () => {
     assert.equal(ambiguous.status, 400);
     assert.equal(ambiguous.body.error.message, 'Ambiguous method name');
 
-    const qualified = await postJson({
+    const qualified = await postJson(baseUrl, {
       jsonrpc: '2.0',
       id: 'qualified',
       method: 'test.rpc.MockService.Echo',
@@ -297,18 +298,6 @@ describe('ambiguous method dispatch', () => {
     assert.equal(qualified.status, 200);
     assert.deepEqual(qualified.body.result, { message: 'hello' });
   });
-
-  async function postJson(payload) {
-    const response = await fetch(`${baseUrl}/json_rpc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    return {
-      status: response.status,
-      body: await response.json(),
-    };
-  }
 });
 
 describe('resource limits', () => {
@@ -350,18 +339,9 @@ describe('resource limits', () => {
     }
   }
 
-  async function post(baseUrl, payload) {
-    const response = await fetch(`${baseUrl}/json_rpc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    return { status: response.status, body: await response.json() };
-  }
-
   it('aborts a hung upstream call once the deadline passes', async () => {
     await withProxy({ callTimeoutMs: 100 }, async (baseUrl) => {
-      const response = await post(baseUrl, { jsonrpc: '2.0', id: 'hang', method: 'Hang', params: {} });
+      const response = await postJson(baseUrl, { jsonrpc: '2.0', id: 'hang', method: 'Hang', params: {} });
       assert.ok(response.status >= 400);
       assert.ok(response.body.error);
     });
@@ -369,7 +349,7 @@ describe('resource limits', () => {
 
   it('caps the number of buffered server-stream rows', async () => {
     await withProxy({ maxResponseRows: 2 }, async (baseUrl) => {
-      const response = await post(baseUrl, { jsonrpc: '2.0', id: 'big', method: 'ListItems', params: { count: 5 } });
+      const response = await postJson(baseUrl, { jsonrpc: '2.0', id: 'big', method: 'ListItems', params: { count: 5 } });
       assert.ok(response.status >= 400);
       const detail = response.body.error?.data ?? response.body.error?.message ?? '';
       assert.match(detail, /exceeded 2 rows/);
@@ -380,7 +360,7 @@ describe('resource limits', () => {
     // Tiny request (passes the send limit) but a large response (Big returns
     // ~8 KiB), so the bound is tripped specifically on the receive path.
     await withProxy({ maxRecvBytes: 1024 }, async (baseUrl) => {
-      const response = await post(baseUrl, { jsonrpc: '2.0', id: 'big-msg', method: 'Big', params: {} });
+      const response = await postJson(baseUrl, { jsonrpc: '2.0', id: 'big-msg', method: 'Big', params: {} });
       assert.ok(response.status >= 400);
       assert.ok(response.body.error);
     });
@@ -391,10 +371,7 @@ describe('vendored Tari protos', () => {
   for (const proto of ['base_node.proto', 'wallet.proto']) {
     it(`loads ${proto}`, () => {
       const definition = protoLoader.loadSync(path.join(__dirname, '..', proto), {
-        keepCase: true,
-        longs: String,
-        bytes: Array,
-        defaults: true,
+        ...PROTO_LOADER_OPTIONS,
         includeDirs: [path.join(__dirname, '..')],
       });
       assert.ok(Object.keys(definition).some((key) => key.startsWith('tari.rpc.')));
@@ -403,12 +380,7 @@ describe('vendored Tari protos', () => {
 });
 
 async function startMockGrpcServer() {
-  const packageDefinition = protoLoader.loadSync(fixtureProto, {
-    keepCase: true,
-    longs: String,
-    bytes: Array,
-    defaults: true,
-  });
+  const packageDefinition = protoLoader.loadSync(fixtureProto, PROTO_LOADER_OPTIONS);
   const proto = grpc.loadPackageDefinition(packageDefinition).test.rpc;
   const server = new grpc.Server();
 
